@@ -9,7 +9,7 @@ const manifest = {
     id: "org.vodplaylist",
     version: "1.1.0",
     name: "SID VOD Playlist",
-    description: "Watch your personal M3U playlists. Add your own link in settings!",
+    description: "Watch your personal M3U playlists.",
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series"],
     catalogs: [
@@ -17,13 +17,12 @@ const manifest = {
             type: "movie",
             id: "vod-playlist",
             name: "My VOD Playlist",
-            extra: [{ name: "search", isRequired: false }]
         }
     ],
     idPrefixes: ["vod-"],
     behaviorHints: {
-        configurable: true, // Allows users to see a 'Configure' button
-        configurationRequired: false
+        configurable: true,
+        configurationRequired: true // Forces the user to the config page first
     }
 };
 
@@ -103,20 +102,29 @@ builder.defineStreamHandler(async (args) => {
     return { streams: meta ? [{ url: meta.url, title: meta.name }] : [] };
 });
 
-// Configure the Landing Page/Config UI
-app.get("/", (req, res) => {
+// This handles the "Cannot GET /configure" error
+app.get("/configure", (req, res) => {
+    res.setHeader("Content-Type", "text/html");
     res.send(`
-        <h1>SID VOD Playlist Config</h1>
-        <p>Enter your M3U URL below:</p>
-        <input type="text" id="m3u" style="width:80%" placeholder="https://example.com/list.m3u">
-        <button onclick="install()">Install on Stremio</button>
-        <script>
-            function install() {
-                const url = document.getElementById('m3u').value;
-                const b64 = btoa(url);
-                window.location.href = 'stremio://' + window.location.host + '/config=' + b64 + '/manifest.json';
-            }
-        </script>
+        <html>
+            <body style="background: #111; color: white; font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>M3U Playlist Configurator</h1>
+                <p>Paste your M3U URL below to load your playlist:</p>
+                <input type="text" id="m3u" style="width: 80%; padding: 10px; margin-bottom: 20px;" placeholder="https://example.com/playlist.m3u">
+                <br>
+                <button onclick="install()" style="padding: 10px 20px; cursor: pointer;">Install / Reload Playlist</button>
+                
+                <script>
+                    function install() {
+                        const m3uUrl = document.getElementById('m3u').value;
+                        if (!m3uUrl) return alert("Please enter a URL");
+                        // Encode the URL to Base64 to pass it safely in the manifest URL
+                        const config = btoa(m3uUrl);
+                        window.location.href = 'stremio://' + window.location.host + '/' + config + '/manifest.json';
+                    }
+                </script>
+            </body>
+        </html>
     `);
 });
 
