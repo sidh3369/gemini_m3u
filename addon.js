@@ -1,36 +1,39 @@
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const express = require("express");
 const axios = require("axios");
+const app = express();
 
 const PORT = process.env.PORT || 3000;
 const DEFAULT_M3U = "https://raw.githubusercontent.com/sidh3369/m3u_bot/main/1.m3u";
 
+// 1. Manifest Configuration
 const manifest = {
-    id: "org.vodplaylist",
+    id: "org.vodplaylist.sid",
     version: "1.1.0",
     name: "SID VOD Playlist",
-    description: "Watch your personal M3U playlists.",
+    description: "Add your own M3U links and watch instantly.",
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series"],
     catalogs: [
         {
             type: "movie",
             id: "vod-playlist",
-            name: "My VOD Playlist",
+            name: "My M3U Playlist",
+            extra: [{ name: "search" }]
         }
     ],
     idPrefixes: ["vod-"],
     behaviorHints: {
         configurable: true,
-        configurationRequired: true // Forces the user to the config page first
+        configurationRequired: false
     }
 };
 
-// Helper: Parse M3U from a specific URL
+// 2. M3U Parser Logic
 async function fetchPlaylist(url) {
     try {
         const targetUrl = url || DEFAULT_M3U;
-        const res = await axios.get(targetUrl, { timeout: 5000 });
+        const res = await axios.get(targetUrl, { timeout: 10000 });
         const lines = res.data.split(/\r?\n/);
         let metas = [];
         let currentMeta = {};
@@ -45,7 +48,7 @@ async function fetchPlaylist(url) {
                     name: name.trim(),
                     type: "movie",
                     poster: "https://dl.strem.io/addon-logo.png",
-                    description: `Source: ${name}`
+                    description: `Stream: ${name.trim()}`
                 };
             } else if (line && !line.startsWith("#")) {
                 if (currentMeta.id) {
@@ -58,76 +61,83 @@ async function fetchPlaylist(url) {
         }
         return metas;
     } catch (e) {
-        console.error("Error fetching playlist:", e.message);
+        console.error("Playlist Fetch Error:", e.message);
         return [];
     }
 }
 
-const app = express();
-
-// Middleware to extract M3U URL from the path if present
-// Path format: /config=BASE64_URL/manifest.json
-app.use((req, res, next) => {
-    const configMatch = req.url.match(/\/config=([^/]+)/);
-    if (configMatch) {
-        try {
-            req.userM3u = Buffer.from(configMatch[1], 'base64').toString('utf8');
-        } catch (e) {
-            req.userM3u = DEFAULT_M3U;
-        }
-    } else {
-        req.userM3u = DEFAULT_M3U;
-    }
-    next();
-});
-
+// 3. Stremio Addon Handlers
 const builder = new addonBuilder(manifest);
 
 builder.defineCatalogHandler(async (args) => {
-    // Note: In a production scenario, you'd pass the URL through the 'args'
-    // Stremio SDK usually passes the config in the request
-    const metas = await fetchPlaylist(args.config?.m3u); 
+    // args.config contains the decoded user URL
+    const m3uUrl = args.config ? args.config.m3u : DEFAULT_M3U;
+    const metas = await fetchPlaylist(m3uUrl);
     return { metas };
 });
 
 builder.defineMetaHandler(async (args) => {
-    const metas = await fetchPlaylist(args.config?.m3u);
+    const m3uUrl = args.config ? args.config.m3u : DEFAULT_M3U;
+    const metas = await fetchPlaylist(m3uUrl);
     const meta = metas.find(m => m.id === args.id);
     return { meta: meta || {} };
 });
 
 builder.defineStreamHandler(async (args) => {
-    const metas = await fetchPlaylist(args.config?.m3u);
+    const m3uUrl = args.config ? args.config.m3u : DEFAULT_M3U;
+    const metas = await fetchPlaylist(m3uUrl);
     const meta = metas.find(m => m.id === args.id);
-    return { streams: meta ? [{ url: meta.url, title: meta.name }] : [] };
+    if (meta) {
+        return { streams: [{ url: meta.url, title: meta.name }] };
+    }
+    return { streams: [] };
 });
 
-// This handles the "Cannot GET /configure" error
+// 4. Custom Routes for Express (The Fix)
+
+// Configuration Page UI
 app.get("/configure", (req, res) => {
     res.setHeader("Content-Type", "text/html");
     res.send(`
+        <!DOCTYPE html>
         <html>
-            <body style="background: #111; color: white; font-family: sans-serif; text-align: center; padding: 50px;">
-                <h1>M3U Playlist Configurator</h1>
-                <p>Paste your M3U URL below to load your playlist:</p>
-                <input type="text" id="m3u" style="width: 80%; padding: 10px; margin-bottom: 20px;" placeholder="https://example.com/playlist.m3u">
-                <br>
-                <button onclick="install()" style="padding: 10px 20px; cursor: pointer;">Install / Reload Playlist</button>
-                
-                <script>
-                    function install() {
-                        const m3uUrl = document.getElementById('m3u').value;
-                        if (!m3uUrl) return alert("Please enter a URL");
-                        // Encode the URL to Base64 to pass it safely in the manifest URL
-                        const config = btoa(m3uUrl);
-                        window.location.href = 'stremio://' + window.location.host + '/' + config + '/manifest.json';
-                    }
-                </script>
-            </body>
+        <head>
+            <title>SID Playlist Config</title>
+            <style>
+                body { background: #0c0d19; color: white; font-family: 'Segoe UI', sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                .card { background: #1b1d2f; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 400px; text-align: center; }
+                input { width: 100%; padding: 12px; margin: 20px 0; border-radius: 6px; border: none; background: #2a2c3f; color: white; box-sizing: border-box; }
+                button { background: #3d5afe; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; }
+                button:hover { background: #536dfe; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>M3U Configurator</h2>
+                <p>Paste your M3U link below to sync your playlist.</p>
+                <input type="text" id="m3uInput" placeholder="https://example.com/playlist.m3u">
+                <button onclick="generateLink()">Install Addon</button>
+            </div>
+            <script>
+                function generateLink() {
+                    const url = document.getElementById('m3uInput').value;
+                    if(!url) return alert("Please enter a link!");
+                    // We pass the URL as a config object: { "m3u": "URL" }
+                    const config = encodeURIComponent(JSON.stringify({ m3u: url }));
+                    window.location.href = 'stremio://' + window.location.host + '/' + config + '/manifest.json';
+                }
+            </script>
+        </body>
         </html>
     `);
 });
 
-// Serve via SDK
+// Redirect root to configure
+app.get("/", (req, res) => res.redirect("/configure"));
+
+// 5. Start the Server
 const addonInterface = builder.getInterface();
 serveHTTP(addonInterface, { server: app, port: PORT });
+
+console.log(`Addon running at http://localhost:${PORT}`);
+console.log(`Config page available at http://localhost:${PORT}/configure`);
